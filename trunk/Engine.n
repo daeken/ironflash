@@ -1,0 +1,13 @@
+using IronFlash;
+
+namespace IronFlash {
+	public class Engine {
+		mutable Movie : NMovie;
+		public this(Movie : NMovie) {
+			this.Movie = Movie
+		}
+		
+		public Play() : void {
+		}
+	}
+}

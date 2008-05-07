@@ -1,0 +1,755 @@
+using System;
+using System.IO;
+using System.IO.Compression;
+
+namespace IronFlash {
+	class BitReader {
+		mutable BR : BinaryReader;
+		mutable BStream : Stream;
+		mutable Pos : long;
+		mutable Cur : byte;
+		mutable CurSize : int;
+		
+		public this(br : BinaryReader) {
+			BR = br;
+			BStream = BR.BaseStream;
+			Pos = -1;
+		}
+		
+		public ReadByte() : void {
+			Cur = BR.ReadByte();
+			CurSize = 8;
+			Pos = BStream.Position;
+		}
+		
+		public ReadUInt(mutable bits : int) : uint {
+			mutable ret : uint = 0;
+			unless(Pos == BStream.Position)
+				ReadByte();
+			
+			while(bits > 0) {
+				when(CurSize == 0)
+					ReadByte();
+				
+				ret = (ret << 1) | ((Cur >> 7) :> uint);
+				bits -= 1;
+				Cur = ((Cur << 1) & 0xFF) :> byte;
+				CurSize -= 1;
+			}
+			
+			ret;
+		}
+		
+		public ReadInt(bits : int) : int {
+			def ret = ReadUInt(bits);
+			
+			if((ret & (1U << (bits - 1))) == 0)
+				ret :> int
+			else
+				((ret :> long) - (1L << bits)) :> int
+		}
+		
+		public ReadFlag() : bool {
+			ReadUInt(1) == 1U
+		}
+		
+		public Pad() : void {
+			Pos = -1
+		}
+	}
+	
+	public variant NMovie {
+		| Movie {
+			Size : Rect;
+			Version : int;
+			Framerate : int;
+			Frames : int;
+			Tags : list [NMovie];
+		}
+		
+		| Rect {
+			minX : int;
+			maxX : int;
+			minY : int;
+			maxY : int;
+		}
+		
+		| Matrix {
+			Scale : bool * int * int;
+			Rotate : bool * int * int;
+			Translate : int * int;
+		}
+		
+		| RGBA {
+			Red : byte;
+			Green : byte;
+			Blue : byte;
+			Alpha : byte;
+		}
+		
+		| SolidFill {
+			SolidFillColor : RGBA;
+		}
+		
+		| LineStyle {
+			LineWidth : int;
+			LineColor : RGBA;
+		}
+		
+		| EndShapeRecord
+		| StyleChangeRecord {
+			Move : bool * int * int;
+			FillA : bool * uint;
+			FillB : bool * uint;
+			Line : bool * uint;
+			NewStyle : bool * list [NMovie] * list [NMovie];
+		}
+		| StraightEdgeRecord {
+			GeneralLine : bool;
+			VertLine : bool;
+			DeltaX : int;
+			DeltaY : int;
+		}
+		| CurvedEdgeRecord {
+			ControlDeltaX : int;
+			ControlDeltaY : int;
+			AnchorDeltaX : int;
+			AnchorDeltaY : int;
+		}
+		
+		| Shape {
+			ShapeRecords : list [NMovie];
+		}
+		
+		| ShapeWithStyle {
+			SWSFillStyles : list [NMovie];
+			SWSLineStyles : list [NMovie];
+			SWSShape : Shape;
+		}
+		
+		| End
+		
+		| ShowFrame
+		
+		| DefineShape {
+			ShapeId : uint;
+			ShapeBounds : Rect;
+			DSShape : ShapeWithStyle;
+		}
+		
+		| SetBackgroundColor {
+			BackgroundColor : RGBA;
+		}
+		
+		| PlaceObject {
+			PODepth : uint;
+			POMove : bool;
+			POCharacterId : bool * uint;
+			POMatrix : bool * object;
+			POColorXForm : bool * object;
+			PORatio : bool * uint;
+			POName : bool * string;
+			POClipDepth : bool * uint;
+			POClipActions : bool * object;
+		}
+		
+		| RemoveObject {
+			RODepth : uint;
+		}
+		
+		| DefineSprite {
+			DSSpriteId : uint;
+			DSFrameCount : uint;
+			DSTags : list [NMovie];
+		}
+		
+		| UnknownTag {
+			TagCode : uint;
+			TagSize : uint;
+		}
+		
+		public static Read(stream : Stream) : NMovie {
+			def br = BinaryReader(stream);
+			
+			def compressed = br.ReadChar() == 'C';
+			
+			assert(br.ReadChar() == 'W');
+			assert(br.ReadChar() == 'S');
+			
+			def version = br.ReadByte();
+			_ = br.ReadUInt32(); // filelen
+			
+			def stream = {
+				if(compressed)
+					DeflateStream(stream, CompressionMode.Decompress)
+				else
+					stream
+			};
+			
+			def br = BinaryReader(stream);
+			def bitr = BitReader(br);
+			
+			def size = ReadRect(bitr);
+			
+			def framerate = br.ReadUInt16() >> 8;
+			def frames = br.ReadUInt16();
+			
+			Movie(
+				size, 
+				version, 
+				framerate, 
+				frames, 
+				ReadTag(br, bitr, [])
+			)
+		}
+		
+		static ReadRect(bitr : BitReader) : Rect {
+			def nBits = bitr.ReadUInt(5) :> int;
+			def rect = Rect(
+				bitr.ReadInt(nBits),
+				bitr.ReadInt(nBits),
+				bitr.ReadInt(nBits),
+				bitr.ReadInt(nBits)
+			);
+			bitr.Pad();
+			rect
+		}
+		
+		static ReadTag(br : BinaryReader, bitr : BitReader, accum : list [NMovie]) : list [NMovie] {
+			def ReadRect() {
+				NMovie.ReadRect(bitr)
+			}
+			
+			def ReadRGB() {
+				RGBA(
+					br.ReadByte(),
+					br.ReadByte(),
+					br.ReadByte(),
+					255
+				)
+			}
+			
+			def ReadRGBA() {
+				RGBA(
+					br.ReadByte(),
+					br.ReadByte(),
+					br.ReadByte(),
+					br.ReadByte()
+				)
+			}
+			
+			def ReadMatrix() {
+				Matrix(
+					{
+						if(bitr.ReadFlag()) {
+							def numBits = bitr.ReadUInt(5) :> int;
+							(true, bitr.ReadInt(numBits), bitr.ReadInt(numBits))
+						} else
+							(false, 0, 0)
+					},
+					{
+						if(bitr.ReadFlag()) {
+							def numBits = bitr.ReadUInt(5) :> int;
+							(true, bitr.ReadInt(numBits), bitr.ReadInt(numBits))
+						} else
+							(false, 0, 0)
+					},
+					{
+						def numBits = bitr.ReadUInt(5) :> int;
+						(bitr.ReadInt(numBits), bitr.ReadInt(numBits))
+					}
+				)
+			}
+			
+			def ReadFillStyles(ver, accum) {
+				def ReadFillStyle(count, accum) {
+					match(count) {
+						| 0 => accum
+						| _ =>
+							ReadFillStyle(
+								count-1, 
+								match(br.ReadByte()) {
+									| 0x00 =>
+										SolidFill(
+											match(ver) {
+												| 1 | 2 => ReadRGB()
+												| _ => ReadRGBA()
+											}
+										)
+									| x =>
+										throw Exception(String.Format("Unknown fill style 0x{0:X}", x))
+								} ::
+								accum
+							)
+					}
+				}
+				
+				ReadFillStyle(
+					match(br.ReadByte()) {
+						| 0xFF when ver > 1 => br.ReadUInt16() :> int
+						| x => x :> int
+					},
+					accum
+				).Reverse()
+			}
+			
+			def ReadLineStyles(ver, accum) {
+				def ReadLineStyle(count, accum) {
+					match(count) {
+						| 0 => accum
+						| _ =>
+							ReadLineStyle(
+								count-1, 
+								match(ver) {
+									| 1 | 2 =>
+										LineStyle(
+											br.ReadUInt16() :> int,
+											ReadRGB()
+										)
+									| 3 =>
+										LineStyle(
+											br.ReadUInt16() :> int,
+											ReadRGBA()
+										)
+									| 4 =>
+										throw Exception("LineStyle2 not supported")
+									| _ =>
+										throw Exception("...")
+								} ::
+								accum
+							)
+					}
+				}
+				
+				ReadLineStyle(
+					match(br.ReadByte()) {
+						| 0xFF => br.ReadUInt16() :> int
+						| x => x :> int
+					},
+					accum
+				).Reverse()
+			}
+			
+			def ReadShapeRecords(ver, fillBits, lineBits, accum) {
+				match(bitr.ReadFlag()) {
+					| false =>
+						def flags = bitr.ReadUInt(5);
+						match(flags) {
+							| 0 =>
+								bitr.Pad();
+								accum
+							| _ =>
+								def newFlag   = (flags & 0b10000) != 0;
+								def lineFlag  = (flags & 0b01000) != 0;
+								def fillBFlag = (flags & 0b00100) != 0;
+								def fillAFlag = (flags & 0b00010) != 0;
+								def moveFlag  = (flags & 0b00001) != 0;
+								
+								def move = {
+									if(moveFlag) {
+										def moveBits = bitr.ReadUInt(5) :> int;
+										(true, bitr.ReadInt(moveBits), bitr.ReadInt(moveBits))
+									} else
+										(false, 0, 0)
+								};
+								
+								def fillA = {
+									if(fillAFlag)
+										(true, bitr.ReadUInt(fillBits))
+									else
+										(false, 0U)
+								};
+								
+								def fillB = {
+									if(fillBFlag)
+										(true, bitr.ReadUInt(fillBits))
+									else
+										(false, 0U)
+								};
+								
+								def line = {
+									if(lineFlag)
+										(true, bitr.ReadUInt(lineBits))
+									else
+										(false, 0U)
+								};
+								
+								def (newStyle, fillBits, lineBits) = {
+									if(newFlag)
+										(
+											(
+												true,
+												ReadFillStyles(ver, []),
+												ReadLineStyles(ver, [])
+											),
+											bitr.ReadUInt(4) :> int,
+											bitr.ReadUInt(4) :> int
+										)
+									else
+										(
+											(false, null, null),
+											fillBits,
+											lineBits
+										)
+								};
+								
+								ReadShapeRecords(
+									ver,
+									fillBits,
+									lineBits,
+									StyleChangeRecord(
+										move,
+										fillA,
+										fillB,
+										line,
+										newStyle
+									) :: accum
+								)
+						}
+					
+					| true =>
+						match(bitr.ReadFlag()) {
+							| false =>
+								def numBits = (bitr.ReadUInt(4)+2) :> int;
+								ReadShapeRecords(
+									ver,
+									fillBits,
+									lineBits,
+									CurvedEdgeRecord(
+										bitr.ReadInt(numBits),
+										bitr.ReadInt(numBits),
+										bitr.ReadInt(numBits),
+										bitr.ReadInt(numBits)
+									) :: accum
+								)
+							
+							| true =>
+								def numBits = (bitr.ReadUInt(4)+2) :> int;
+								def genLine = bitr.ReadFlag();
+								def vertLine = match(genLine) {
+									| false => bitr.ReadFlag()
+									| true => false
+								};
+								def deltaX = {
+									if(genLine || !vertLine)
+										bitr.ReadInt(numBits)
+									else
+										0
+								};
+								def deltaY = {
+									if(genLine || vertLine)
+										bitr.ReadInt(numBits)
+									else
+										0
+								};
+								
+								ReadShapeRecords(
+									ver,
+									fillBits,
+									lineBits,
+									StraightEdgeRecord(
+										genLine,
+										vertLine,
+										deltaX,
+										deltaY
+									) :: accum
+								)
+						}
+				}
+			}
+			
+			def ReadShape(ver) {
+				Shape(
+					ReadShapeRecords(
+						ver,
+						bitr.ReadUInt(4) :> int,
+						bitr.ReadUInt(4) :> int,
+						[]
+					).Reverse()
+				)
+			}
+			
+			def ReadShapeWithStyle(ver) {
+				ShapeWithStyle(
+					ReadFillStyles(ver, []),
+					ReadLineStyles(ver, []),
+					ReadShape(ver)
+				)
+			}
+			
+			def ReadPlaceObject2() {
+				def hasClipActions = bitr.ReadFlag();
+				def hasClipDepth = bitr.ReadFlag();
+				def hasName = bitr.ReadFlag();
+				def hasRatio = bitr.ReadFlag();
+				def hasColorTransform = bitr.ReadFlag();
+				def hasMatrix = bitr.ReadFlag();
+				def hasCharacter = bitr.ReadFlag();
+				def doesMove = bitr.ReadFlag();
+				
+				PlaceObject(
+					br.ReadUInt16() :> uint,
+					doesMove,
+					(
+						hasCharacter,
+						if(hasCharacter)
+							br.ReadUInt16() :> uint
+						else
+							0U
+					),
+					(
+						hasMatrix,
+						if(hasMatrix)
+							ReadMatrix()
+						else
+							null
+					),
+					(
+						hasColorTransform,
+						if(hasColorTransform)
+							throw Exception("osjfpajos")
+						else
+							null
+					),
+					(
+						hasRatio,
+						if(hasRatio)
+							br.ReadUInt16() :> uint
+						else
+							0U
+					),
+					(
+						hasName,
+						if(hasName)
+							throw Exception("psojfp")
+						else
+							null
+					),
+					(
+						hasClipDepth,
+						if(hasClipDepth)
+							br.ReadUInt16() :> uint
+						else
+							0U
+					),
+					(
+						hasClipActions,
+						if(hasClipActions)
+							throw Exception("spaofj")
+						else
+							null
+					)
+				)
+			}
+			
+			def tagCodeAndLength = br.ReadUInt16();
+			def tagCode = (tagCodeAndLength >> 6) :> uint;
+			def tagLength = tagCodeAndLength & 0x3F;
+			
+			def tagLength = {
+				if(tagLength == 0x3F)
+					br.ReadUInt32()
+				else
+					tagLength :> uint
+			};
+			
+			def end = br.BaseStream.Position + tagLength;
+			
+			def tag = match(tagCode) {
+				| 0 =>
+					End()
+				
+				| 1 =>
+					ShowFrame()
+				
+				| 2 =>
+					DefineShape(
+						br.ReadUInt16() :> uint,
+						ReadRect(),
+						ReadShapeWithStyle(1)
+					)
+				
+				| 9 =>
+					SetBackgroundColor(ReadRGB())
+				
+				| 26 =>
+					ReadPlaceObject2()
+				
+				| 28 =>
+					RemoveObject(
+						br.ReadUInt16() :> uint
+					)
+				
+				| 39 =>
+					DefineSprite(
+						br.ReadUInt16() :> uint,
+						br.ReadUInt16() :> uint,
+						ReadTag(br, bitr, [])
+					)
+				
+				| _ =>
+					_ = br.BaseStream.Seek(tagLength, SeekOrigin.Current);
+					Console.WriteLine("Unknown tag: {0}", tagCode);
+					UnknownTag(tagCode, tagLength)
+			};
+			
+			unless(br.BaseStream.Position == end)
+				throw Exception(String.Format("Failed processing tag {0}", tagCode));
+			
+			match(tag) {
+				| End =>
+					accum.Reverse()
+				
+				| tag =>
+					ReadTag(br, bitr, tag :: accum)
+			}
+		}
+		
+		public override ToString() : string {
+			match(this) {
+				| Movie(version, size, framerate, frames, tags) =>
+					String.Format(
+						"NMovie.Movie(Version={0}, Size={1}, Framerate={2}, Frames={3}, Tags={4})",
+						version,
+						size,
+						framerate,
+						frames,
+						tags
+					)
+				
+				| Rect(minX, maxX, minY, maxY) =>
+					String.Format(
+						"NMovie.Rect(minX={0}, maxX={1}, minY={2}, maxY={3})",
+						(minX :> float) / 20.0,
+						(maxX :> float) / 20.0,
+						(minY :> float) / 20.0,
+						(maxY :> float) / 20.0
+					)
+				
+				| RGBA(red, green, blue, alpha) =>
+					String.Format(
+						"RGB({0}, {1}, {2}, {3})",
+						red,
+						green,
+						blue,
+						alpha
+					)
+				
+				| Matrix(scale, rotate, translate) =>
+					String.Format(
+						"Matrix({0}, {1}, {2})",
+						scale,
+						rotate,
+						translate
+					)
+				
+				| SolidFill(color) =>
+					String.Format(
+						"SolidFill({0})",
+						color
+					)
+				
+				| LineStyle(width, color) =>
+					String.Format(
+						"LineStyle({0}, {1})",
+						width,
+						color
+					)
+				
+				| EndShapeRecord =>
+					"EndShapeRecord()"
+				
+				| StyleChangeRecord(move, fillA, fillB, line, newStyle) =>
+					String.Format(
+						"StyleChangeRecord({0}, {1}, {2}, {3}, {4})",
+						move,
+						fillA,
+						fillB,
+						line,
+						newStyle
+					)
+				
+				| StraightEdgeRecord(genLine, vertLine, deltaX, deltaY) =>
+					String.Format(
+						"StraightEdgeRecord({0}, {1}, {2}, {3})",
+						genLine,
+						vertLine,
+						deltaX,
+						deltaY
+					)
+				
+				| CurvedEdgeRecord(controlDeltaX, controlDeltaY, anchorDeltaX, anchorDeltaY) =>
+					String.Format(
+						"CurvedEdgeRecord({0}, {1}, {2}, {3})",
+						controlDeltaX,
+						controlDeltaY,
+						anchorDeltaX,
+						anchorDeltaY
+					)
+				
+				| Shape(shapeRecords) =>
+					String.Format(
+						"Shape({0})",
+						shapeRecords
+					)
+				
+				| ShapeWithStyle(fill, line, shape) =>
+					String.Format(
+						"ShapeWithStyle({0}, {1}, {2})",
+						fill,
+						line,
+						shape
+					)
+				
+				| SetBackgroundColor(rgba) =>
+					String.Format(
+						"SetBackgroundColor({0})",
+						rgba
+					)
+				
+				| End =>
+					"End()"
+				
+				| ShowFrame =>
+					"ShowFrame()"
+				
+				| DefineShape(id, bounds, shape) =>
+					String.Format(
+						"DefineShape({0}, {1}, {2})",
+						id,
+						bounds,
+						shape
+					)
+				
+				| PlaceObject(depth, move, charId, matrix, cxform, ratio, name, clipDepth, clipActions) =>
+					String.Format(
+						"PlaceObject{0}",
+						(depth, move, charId, matrix, cxform, ratio, name, clipDepth, clipActions)
+					)
+				
+				| RemoveObject(depth) =>
+					String.Format(
+						"RemoveObject({0})",
+						depth
+					)
+				
+				| DefineSprite(id, frames, tags) =>
+					String.Format(
+						"DefineSprite({0}, {1}, {2})",
+						id,
+						frames,
+						tags
+					)
+				
+				| UnknownTag(tagCode, tagLength) =>
+					String.Format(
+						"UnknownTag(TagCode={0}, TagLength={1})",
+						tagCode,
+						tagLength
+					)
+				
+				| x => throw Exception(String.Format("Unknown NMovie type {0}", x.GetType()))
+			}
+		}
+	}
+}
