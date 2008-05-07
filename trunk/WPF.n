@@ -1,0 +1,39 @@
+using System;
+using System.Threading;
+using System.Windows;
+
+namespace IronFlash {
+	public class WPF : Window, IFrontend {
+		public this() {
+			Title = "IronFlash WPF";
+			Width = 800;
+			Height = 600;
+		}
+		
+		public SetSize(size : int * int) : void {
+			(Width, Height) = size;
+			Width /= 20;
+			Height /= 20;
+		}
+		
+		public Run(engine : Engine) : void {
+			_ = IFApplication(engine).Run(this)
+		}
+	}
+	
+	public class IFApplication : Application {
+		mutable IFEngine : Engine;
+		
+		public this(engine : Engine) {
+			base();
+			
+			this.IFEngine = engine;
+		}
+		
+		protected override OnStartup(args : StartupEventArgs) : void {
+			base.OnStartup(args);
+			
+			Thread(ThreadStart(IFEngine.Play)).Start()
+		}
+	}
+}

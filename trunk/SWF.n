@@ -72,6 +72,15 @@ namespace IronFlash {
 			maxX : int;
 			minY : int;
 			maxY : int;
+			
+			RectSize : int * int {
+				get {
+					(
+						maxX - minX,
+						maxY - minY
+					)
+				}
+			};
 		}
 		
 		| Matrix {
@@ -168,7 +177,7 @@ namespace IronFlash {
 			TagSize : uint;
 		}
 		
-		public static Read(stream : Stream) : NMovie {
+		public static Read(stream : Stream) : NMovie.Movie {
 			def br = BinaryReader(stream);
 			
 			def compressed = br.ReadChar() == 'C';

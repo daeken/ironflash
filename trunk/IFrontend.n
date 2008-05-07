@@ -1,0 +1,6 @@
+namespace IronFlash {
+	public interface IFrontend {
+		SetSize(size : int * int) : void;
+		Run(engine : Engine) : void;
+	}
+}

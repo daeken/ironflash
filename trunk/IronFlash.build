@@ -20,6 +20,13 @@
 			<sources>
 				<include name="*.n" />
 			</sources>
+			<references>
+				<lib>
+					<include name="C:\Program Files\Reference Assemblies\Microsoft\Framework\v3.0" />
+				</lib>
+				<include name="PresentationCore.dll" />
+				<include name="PresentationFramework.dll" />
+			</references>
 		</ncc>
 	</target>
 </project>
