@@ -3,10 +3,12 @@ using System.IO;
 
 namespace IronFlash {
 	module IronFlash {
+		[STAThread]
 		public Main(args : array [string]) : void {
 			def movie = NMovie.Read(File.OpenRead(args[0]));
-			def engine = Engine(movie);
-			engine.Play()
+			def frontend = WPF();
+			def engine = Engine(movie, frontend);
+			engine.Run()
 		}
 	}
 }

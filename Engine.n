@@ -1,10 +1,18 @@
 using IronFlash;
+using System;
 
 namespace IronFlash {
 	public class Engine {
-		mutable Movie : NMovie;
-		public this(Movie : NMovie) {
-			this.Movie = Movie
+		mutable Movie : NMovie.Movie;
+		mutable Frontend : IFrontend;
+		public this(Movie : NMovie.Movie, Frontend : IFrontend) {
+			this.Movie = Movie;
+			this.Frontend = Frontend;
+			Frontend.SetSize(Movie.Size.RectSize)
+		}
+		
+		public Run() : void {
+			Frontend.Run(this)
 		}
 		
 		public Play() : void {
