@@ -1,0 +1,12 @@
+using System;
+using System.IO;
+
+namespace IronFlash {
+	module IronFlash {
+		public Main(args : array [string]) : void {
+			def movie = NMovie.Read(File.OpenRead(args[0]));
+			def engine = Engine(movie);
+			engine.Play()
+		}
+	}
+}
